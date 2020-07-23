@@ -4,17 +4,17 @@ from tqdm import tqdm
 import csv
 import numpy as np
 import pandas as pd
+import os
 
 
-async def check_exsit(id):
-    with open('./term.csv') as f:
-        buffer = f.readline()
-        while buffer:
-            buffer = f.readline().strip('\n')
-            if len(buffer):
-                items = buffer.split('|')
-                if int(items[1]) == int(id):
-                    return items[4]
+async def check_exsit(id, pid):
+    df = pd.read_csv("./term.csv", delimiter='|')
+    df = df.drop(['alias', 'name', 'categories', 'definition', 'source'], 1)
+    r_df = df.loc[df['pid'] == pid]
+    r_df = r_df.loc[df['id'] == id]
+    if len(r_df.category_ids.values):
+        print(f'Exsit id -> {id}')
+        return r_df.category_ids.values[0]
     return None
 
 
@@ -79,25 +79,32 @@ async def explain(id, alias):
         }
 
 
-async def term(id=0, name='', parent_id=0):
-    print(f'Processing: {id} - {name}')
+async def term(id=0, name='', pid=0):
+    print(f'Processing: {id} - {name} - {pid}')
+    try:
+        exsit_state = await check_exsit(id, pid)
+        if exsit_state:
+            for item in await tree(exsit_state):
+                await term(item['id'], item['name'], id)
+        else:
+            result = await explain(id, name)
 
-    exsit_state = await check_exsit(id)
-    if exsit_state:
-        for item in await tree(exsit_state):
-            await term(item['id'], item['name'], id)
-    else:
-        result = await explain(id, name)
+            with open('./term.csv', 'a+') as f:
+                f.write(
+                    f"{pid}|{result['id']}|{result['alias']}|{result['name']}|{result['category_ids']}|{result['categories']}|{result['definition']}|{result['source']}\n")
 
-        with open('./term.csv', 'a+') as f:
-            f.write(
-                f"{parent_id}|{result['id']}|{result['alias']}|{result['name']}|{result['category_ids']}|{result['categories']}|{result['definition']}|{result['source']}\n")
+            print(
+                f"{pid}|{result['id']}|{result['alias']}|{result['name']}|{result['category_ids']}|{result['categories']}|{result['definition']}|{result['source']}")
 
-        print(
-            f"{parent_id}|{result['id']}|{result['alias']}|{result['name']}|{result['category_ids']}|{result['categories']}|{result['definition']}|{result['source']}")
+            for item in await tree(result['category_ids']):
+                await term(item['id'], item['name'], id)
+    except Exception as e:
+        with open('./error.log', 'a+') as f:
+            f.write(f"id={id} name={name} parent_id={pid}\n")
+            f.write(f'{str(e)}\n\n')
 
-        for item in await tree(result['category_ids']):
-            await term(item['id'], item['name'], id)
+        with open('./tmp.log', 'a+') as f:
+            f.write(f"{id},{name},{pid}\n")
 
 
 async def remove_duplicate():
@@ -106,14 +113,29 @@ async def remove_duplicate():
     df.drop_duplicates(subset="id", keep=False, inplace=True)
     df.sort_values("pid", inplace=True)
     df.to_csv('./term-remove-duplicate.csv', encoding='utf-8', index=False, sep='|')
+    # df.to_csv('./term-for-neo4j.csv', encoding='utf-8', index=False, quoting=1)
 
 
 if __name__ == '__main__':
+    if os.path.exists(f'./error.log'):
+        os.remove(f'./error.log')
+    if os.path.exists(f'./tmp.log'):
+        os.remove(f'./tmp.log')
+
+    # asyncio.run(remove_duplicate())
+
+    # if not os.path.exists(f'./failed.csv'):
+    #     with open('./failed.csv', 'w') as f:
+    #         f.write('id,name,parent_id\n')
+    # else:
+    #     with open('./failed.csv') as f:
+    #         for line in csv.DictReader(f, delimiter=','):
+    #             asyncio.run(term(id=int(line['id']), name=line['name'], pid=int(line['parent_id'])))
+    #     os.remove(f'./failed.csv')
+
     with open('./categories.csv') as f:
         for line in csv.DictReader(f, delimiter=','):
-            try:
-                asyncio.run(term(id=line['id'], name=line['name']))
-            except Exception as e:
-                with open('./error.log', 'a+') as f:
-                    f.write(f"id={line['id']} name={line['name']} category={line['category']}\n")
-                    f.write(f'{str(e)}\n\n')
+            if line['enable'] == '1':
+                asyncio.run(term(id=int(line['id']), name=line['name']))
+
+

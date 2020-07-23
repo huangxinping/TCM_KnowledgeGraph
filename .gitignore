@@ -5,6 +5,8 @@ __pycache__/
 
 .idea/
 .python-version
+wikidataSpider/error.log
+wikidataSpider/failed.csv
 
 # C extensions
 *.so
